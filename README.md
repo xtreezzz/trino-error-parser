@@ -46,13 +46,14 @@ This project extracts error information from the Trino source code by parsing ex
 
 - Python 3.6 or higher
 - Trino source code available locally
+  - Clone the Trino repository from [trinodb/trino](https://github.com/trinodb/trino)
 
 ## Installation
 
 1. **Clone the repository:**
 
    ```bash
-   git clone https://github.com/yourusername/trino-error-parser.git
+   git clone https://github.com/xtreezzz/trino-error-parser.git
    ```
 
 2. **Navigate to the project directory:**
