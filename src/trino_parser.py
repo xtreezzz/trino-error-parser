@@ -85,9 +85,11 @@ def search_errors_in_source(source_directory):
     for root, dirs, files in os.walk(source_directory):
         for file in files:
             if file.endswith(".java"):
-                # Correct path handling for Windows and Unix
-                file_path = os.path.join(root, file).replace("\\", "/")
-                with open(file_path, 'r', encoding='utf-8') as f:
+                # Compute the absolute path
+                absolute_path = os.path.join(root, file)
+                # Compute the relative path
+                relative_path = os.path.relpath(absolute_path, source_directory).replace("\\", "/")
+                with open(absolute_path, 'r', encoding='utf-8') as f:
                     for line in f:
                         line = line.strip()
                         # Search for exception throws
@@ -110,7 +112,7 @@ def search_errors_in_source(source_directory):
 
                             # Build the unified error entry
                             errors.append({
-                                'file_path': file_path,
+                                'file_path': relative_path,  # Используем относительный путь
                                 'error_code': error_code.strip('"') if error_code else None,
                                 'error_code_name': None,  # Adjust if you have a mapping
                                 'error_class_name': error_class_name,
