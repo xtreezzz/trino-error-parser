@@ -67,7 +67,7 @@ def parse_error_message_argument(error_message_argument):
                 current_part = ''
         else:
             current_part += c
-            escaped = False
+        escaped = False
         i += 1
     if current_part.strip():
         if current_part.startswith('"') and current_part.endswith('"'):
@@ -90,14 +90,13 @@ def search_errors_in_source(source_directory):
                 # Compute the relative path
                 relative_path = os.path.relpath(absolute_path, source_directory).replace("\\", "/")
                 with open(absolute_path, 'r', encoding='utf-8') as f:
-                    for line in f:
+                    for line_number, line in enumerate(f, start=1):
                         line = line.strip()
                         # Search for exception throws
                         match = exception_pattern.search(line)
                         if match:
                             error_class_name = match.group(1)
                             error_message = match.group(2)
-
                             # Split the arguments
                             args = split_arguments(error_message)
                             if len(args) >= 2:
@@ -109,10 +108,9 @@ def search_errors_in_source(source_directory):
                                 error_code = None
                                 error_message_template = ''
                                 error_message_variables = []
-
                             # Build the unified error entry
                             errors.append({
-                                'file_path': relative_path,  # Используем относительный путь
+                                'file_path': f"{relative_path}:{line_number}",
                                 'error_code': error_code.strip('"') if error_code else None,
                                 'error_code_name': None,  # Adjust if you have a mapping
                                 'error_class_name': error_class_name,
@@ -126,7 +124,7 @@ def search_errors_in_source(source_directory):
 # Save results to a JSON file
 def save_errors_to_json(errors, output_file):
     with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(errors, f, indent=4, ensure_ascii=False)
+        json.dump({'errors': errors}, f, indent=4, ensure_ascii=False)
     print(f"Results saved to {output_file}")
 
 # Main logic
@@ -136,9 +134,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--source_directory', required=True, help='Path to the Trino source code directory.')
     parser.add_argument('-o', '--output_file', default='errors_trino.json', help='Output JSON file path.')
     args = parser.parse_args()
-
     source_directory = args.source_directory
     output_file = args.output_file
-
     errors_found = search_errors_in_source(source_directory)
     save_errors_to_json(errors_found, output_file)
