@@ -5,80 +5,94 @@ import argparse
 
 # Regular expression to find exception throws with nested constructors support
 exception_pattern = re.compile(
-    r'throw\s+new\s+(\w+Exception)\s*\((.*)\);'
+    r'throw\s+new\s+([\w<>, ]+Exception)\s*\((.*?)\);', re.DOTALL
 )
-
-# Regular expression to find string literals in arguments
-string_literal_pattern = re.compile(r'"(.*?)"')
 
 def split_arguments(argument_string):
     arguments = []
     current_arg = ''
     paren_count = 0
     in_quote = False
+    escaped = False
     i = 0
     while i < len(argument_string):
         c = argument_string[i]
-        if c == '"' and (i == 0 or argument_string[i - 1] != '\\'):
+        if c == '\\' and not escaped:
+            escaped = True
+            current_arg += c
+        elif c == '"' and not escaped:
             in_quote = not in_quote
             current_arg += c
-        elif in_quote:
-            current_arg += c
-        elif c == ',' and paren_count == 0:
+        elif c == ',' and not in_quote and paren_count == 0:
             arguments.append(current_arg.strip())
             current_arg = ''
         else:
-            if c == '(':
+            if c == '(' and not in_quote:
                 paren_count += 1
-            elif c == ')':
+            elif c == ')' and not in_quote:
                 paren_count -= 1
             current_arg += c
+        if escaped and c != '\\':
+            escaped = False
         i += 1
-    if current_arg:
+    if current_arg.strip():
         arguments.append(current_arg.strip())
     return arguments
 
 def parse_error_message_argument(error_message_argument):
-    current_part = ''
-    in_quote = False
-    escaped = False
-    variables = []
-    template = ''
-    i = 0
-    while i < len(error_message_argument):
-        c = error_message_argument[i]
-        if c == '\\' and not escaped:
-            escaped = True
-            current_part += c
-        elif c == '"' and not escaped:
-            in_quote = not in_quote
-            current_part += c
-            if not in_quote:
-                # End of string literal
-                content = current_part[1:-1]
-                template += content
-                current_part = ''
-        elif c == '+' and not in_quote:
-            if current_part.strip():
-                if not current_part.startswith('"'):
-                    # Variable
-                    template += '{}'
-                    variables.append(current_part.strip())
-                current_part = ''
-        else:
-            current_part += c
-        escaped = False
-        i += 1
-    if current_part.strip():
-        if current_part.startswith('"') and current_part.endswith('"'):
-            # String literal
-            content = current_part[1:-1]
-            template += content
-        else:
-            # Variable
-            template += '{}'
-            variables.append(current_part.strip())
-    return template, variables
+    error_message_argument = error_message_argument.strip()
+    # Check if it's a format call (String.format or statically imported format)
+    format_match = re.match(r'(?:String\.)?format\((.*)\)', error_message_argument)
+    formatted_match = re.match(r'"(.*)"\.formatted\((.*)\)', error_message_argument)
+    if format_match:
+        # Existing format(...) handling
+        format_args_str = format_match.group(1)
+        format_args = split_arguments(format_args_str)
+        if format_args:
+            format_string = format_args[0].strip('"')
+            format_variables = format_args[1:]
+            return format_string, format_variables
+    elif formatted_match:
+        # Handle "..." .formatted(...)
+        format_string = formatted_match.group(1)
+        format_args_str = formatted_match.group(2)
+        format_variables = split_arguments(format_args_str)
+        return format_string, format_variables
+    else:
+        # Existing parsing logic
+        if error_message_argument.startswith("(") and error_message_argument.endswith(")"):
+            error_message_argument = error_message_argument[1:-1].strip()
+
+        template_parts = []
+        variables = []
+        tokens = re.split(r'(\+)', error_message_argument)
+        in_quote = False
+        current_string = ''
+        for token in tokens:
+            token = token.strip()
+            if not token:
+                continue
+            if token == '+':
+                continue
+            if token.startswith('"') and token.endswith('"') and not in_quote:
+                content = token[1:-1]
+                template_parts.append(content)
+            elif token.startswith('"') and not in_quote:
+                in_quote = True
+                current_string = token[1:]
+            elif token.endswith('"') and in_quote:
+                current_string += token[:-1]
+                template_parts.append(current_string)
+                current_string = ''
+                in_quote = False
+            elif in_quote:
+                current_string += token
+            else:
+                template_parts.append('{}')
+                variables.append(token)
+
+        template = ''.join(template_parts)
+        return template, variables
 
 def search_errors_in_source(source_directory):
     errors = []
@@ -90,35 +104,56 @@ def search_errors_in_source(source_directory):
                 # Compute the relative path
                 relative_path = os.path.relpath(absolute_path, source_directory).replace("\\", "/")
                 with open(absolute_path, 'r', encoding='utf-8') as f:
-                    for line_number, line in enumerate(f, start=1):
-                        line = line.strip()
-                        # Search for exception throws
-                        match = exception_pattern.search(line)
-                        if match:
-                            error_class_name = match.group(1)
-                            error_message = match.group(2)
-                            # Split the arguments
-                            args = split_arguments(error_message)
-                            if len(args) >= 2:
-                                error_code = args[0]
-                                error_message_argument = args[1]
-                                # Parse error message
-                                error_message_template, error_message_variables = parse_error_message_argument(error_message_argument)
-                            else:
-                                error_code = None
-                                error_message_template = ''
-                                error_message_variables = []
-                            # Build the unified error entry
-                            errors.append({
-                                'file_path': f"{relative_path}:{line_number}",
-                                'error_code': error_code.strip('"') if error_code else None,
-                                'error_code_name': None,  # Adjust if you have a mapping
-                                'error_class_name': error_class_name,
-                                'error_message_template': error_message_template,
-                                'error_message_variables': error_message_variables,
-                                'severity_level': "ERROR",
-                                'original_text': line
-                            })
+                    source_code = f.read()
+                # Search for exception throws
+                matches = exception_pattern.finditer(source_code)
+                for match in matches:
+                    error_class_name = match.group(1).strip()
+                    error_message = match.group(2).strip()
+                    # Split the arguments
+                    args = split_arguments(error_message)
+                    error_message_template = ''
+                    error_message_variables = []
+                    if args:
+                        message_found = False
+                        for arg in args:
+                            arg = arg.strip()
+                            if arg.startswith('"') and arg.endswith('"'):
+                                # String literal
+                                error_message_template = arg.strip('"')
+                                message_found = True
+                                break
+                            elif 'format(' in arg or '.formatted(' in arg:
+                                # Possibly a format call
+                                error_message_template, error_message_variables = parse_error_message_argument(arg)
+                                message_found = True
+                                break
+                            elif '+' in arg or '"' in arg:
+                                # Concatenated string
+                                error_message_template, error_message_variables = parse_error_message_argument(arg)
+                                message_found = True
+                                break
+                        if not message_found:
+                            # No message argument found, use exception class name as message
+                            error_message_template = error_class_name
+                    else:
+                        # No arguments, use exception class name as message
+                        error_message_template = error_class_name
+                    # Find line number
+                    start_index = match.start()
+                    line_number = source_code.count('\n', 0, start_index) + 1
+                    line_text = source_code.split('\n')[line_number - 1].strip()
+                    # Build the unified error entry
+                    errors.append({
+                        'file_path': f"{relative_path}:{line_number}",
+                        'error_code': None,  # Adjust if you have a mapping
+                        'error_code_name': None,
+                        'error_class_name': error_class_name,
+                        'error_message_template': error_message_template,
+                        'error_message_variables': error_message_variables,
+                        'severity_level': "ERROR",
+                        'original_text': line_text
+                    })
     return errors
 
 # Save results to a JSON file
